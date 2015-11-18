@@ -1,0 +1,12 @@
+#!/bin/bash
+
+pid=`pgrep -f $1`
+if [ -z "$pid" ]; then
+    echo "usage: <process-name>"
+    exit 1
+fi
+echo "found pid $pid"
+now=$(date +'%s')
+file="ltrace-${pid}-${now}.trace"
+
+ltrace -o $file -T -tttt -p $pid

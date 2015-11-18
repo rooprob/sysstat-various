@@ -1,0 +1,27 @@
+mount <project> into your VM
+
+cd collector
+source create_scratch
+
+(cd's you into a scratch dir)
+
+Gather
+======
+port-record <port> tornado_notification_server
+ltrace-record tornado_notification_sever
+tcp-record <port> <if>
+
+(after test copy the log from service to this scratch dir and edit out the non-relevant lines)
+
+Process
+=======
+process-port <file>
+process-tcp <file>
+process-notification-log (see other reports in reporters-pl) <file>
+
+Graph
+=====
+<guide only: currently a little bit custom>
+
+graph-*
+

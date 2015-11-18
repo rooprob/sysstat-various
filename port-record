@@ -1,0 +1,89 @@
+# set -x
+
+port=$1
+proc=`pgrep -f $2`
+
+if [ -z "$port" -o -z "$proc" ]; then
+    echo "usage: <port> <process>"
+    exit 1
+fi
+
+now=$(date +'%s')
+
+report_file="record-port-${port}-${now}.log"
+
+# 4096
+page_size=$(getconf PAGE_SIZE)
+
+echo "info: /proc/sys/net/ipv4/tcp_mem"
+echo "--------------------------------"
+cat /proc/sys/net/ipv4/tcp_mem
+gawk -v PAGE_SIZE=$page_size '{ printf("%.2f MB %.2f MB %.2f MB\n",
+    ($1 * PAGE_SIZE) / (1024*1024),
+    ($2 * PAGE_SIZE) / (1024*1024),
+    ($3 * PAGE_SIZE) / (1024*1024)) }' /proc/sys/net/ipv4/tcp_mem
+
+echo "info: /proc/net/sockstat"
+echo "------------------------"
+cat /proc/net/sockstat
+gawk -v PAGE_SIZE=$page_size '/^TCP:/ { printf("%.2f MB\n",
+    ($11 * PAGE_SIZE) / (1024 * 1024)) }' /proc/net/sockstat
+
+
+echo "info: /proc/sys/net/ipv4/tcp_max_orphans"
+cat /proc/sys/net/ipv4/tcp_max_orphans
+max_orphans=$(cat /proc/sys/net/ipv4/tcp_max_orphans)
+
+echo "info: /proc/net/snmp"
+cat /proc/net/snmp
+
+
+echo "------------------------"
+
+echo "info: looping for port:$port process:$proc $2"
+while [ 1 ]
+do
+    MEM=`ps -o rss= -p $proc | tr -d ' '`
+    time=$(date +'%s')
+    date=$(date --rfc-3339=seconds)
+    dropped=$(tc -s -d qdisc ls dev eth0 | gawk '/dropped/ { print $7 }'| tr -d ,)
+    backlog=$(tc -s -d qdisc ls dev eth0 | awk '/backlog/ { print $2,$3 }')
+    listener=$(ss -m -l sport = :$port | awk '/LISTEN/ { printf("%s %s ",$2,$3) } /mem/ { printf("%s\n", $1) }')
+    filenr=$(gawk '{ printf("%s:%s:%s\n", $1, $2, $3) }' /proc/sys/fs/file-nr)
+
+    #                                                     inuse orphan tw alloc mem
+    sockstat=$(gawk -v PAGE_SIZE=$page_size '/^TCP:/ { printf("%s:%s:%s:%s:%s %dMB",
+        $3, $5, $7, $9, $11, ($11 * PAGE_SIZE) / (1024*1024)) }' /proc/net/sockstat)
+    ss -4 -n -a "dport = :$port or sport = :$port" | gawk \
+        -v MEM=$MEM \
+        -v PORT=$port \
+        -v PID=$proc \
+        -v TIME=$time \
+        -v DATE="$date" \
+        -v BACKLOG="$backlog" \
+        -v DROPPED=$dropped \
+        -v LISTENER="$listener" \
+        -v FILENR="$filenr" \
+        -v SOCKSTAT="$sockstat" \
+        '
+        BEGIN {
+            state["LISTEN"] = 0
+            state["SYN-SENT"] = 0
+            state["SYN-RECV"] = 0
+            state["FIN-WAIT-1"] = 0
+            state["FIN-WAIT-2"] = 0
+            state["ESTAB"] = 0
+            state["CLOSE-WAIT"] = 0
+            state["TIME-WAIT"] = 0
+        }
+        $1 != "State" { state[$1] ++ }
+        END {
+
+            printf("%s\t%s\t%s\t%s\t%s\t%s\t%d\t%d\t%d", TIME, LISTENER, BACKLOG, DROPPED, SOCKSTAT, FILENR, PORT, MEM, PID);
+            for (s in state) {
+                printf("\t%s:%d", s, state[s]);
+            }
+            printf("\n");
+        } '
+    sleep 2
+done | tee -a $report_file

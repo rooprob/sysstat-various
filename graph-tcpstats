@@ -1,0 +1,15 @@
+#!/bin/bash
+
+tcpdump_file=$1
+
+tcpstat -r $tcpdump_file -o "%R\t%T\n" 5 > ${tcpdump_file}.tcpstat
+
+(
+echo "set terminal png size 1000,600"
+echo "set grid"
+echo "set yrange [ -10 :  ]"
+echo "set title \"TCP breakdown\""
+echo "set xlabel \"seconds\""
+echo "set ylabel \"packets/s\""
+echo "plot \"${tcpdump_file}.tcpstat\" using 1:(\$2/5) smooth csplines title \"TCP\""
+) | gnuplot > ${tcpdump_file}.png

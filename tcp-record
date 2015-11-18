@@ -1,0 +1,15 @@
+#!/bin/bash
+
+port=$1
+if=$2
+
+if [ -z "$port" -o -z "$if" ]; then
+    echo "usage: <port> <if>"
+    exit 1
+fi
+
+now=$(date +'%s')
+
+file=${port}-${if}-${now}.pcap
+
+tcpdump -n -w $file -i $if port $port

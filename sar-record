@@ -1,0 +1,7 @@
+#!/bin/bash
+
+now=$(date +'%s')
+
+file=sar-${now}.dat
+
+sar -o $file 1

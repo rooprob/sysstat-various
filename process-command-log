@@ -1,0 +1,107 @@
+#!/usr/bin/perl -w
+#
+# Log input:
+#
+# [I 130502 07:20:12 handler:229] < device_os:Android device_uuid:user561310ktestenvlocalcom1364468190 > 200 POST /command/fetch (127.0.0.1) 851.77ms
+# [I 130502 07:20:12 command_manager:154] Estimated incoming devices: 700, wait_for: 1.400000
+#
+# Sample output:
+#
+# time, date, incoming_devices,incoming_wait,other,accu, 200
+# 1367479205,Thu May  2 07:20:05 2013,0,0,0,1,1
+# 1367479210,Thu May  2 07:20:10 2013,3050,6,0,113,112
+# 1367479215,Thu May  2 07:20:15 2013,0,0,0,272,159
+#
+use strict;
+
+use Data::Dumper ;
+use Time::Local qw{timegm};
+my $snap = 5 ;
+my $last = 0;
+my $count = 0;
+my $total_count = 0;
+my $unfinished = 0 ;
+my %completed ;
+my $min_time = 0;
+my $max_time = 0;
+my $time = 0;
+my %flags = ();
+my $flag ;
+my @fields = qw{ incoming_devices incoming_wait other accu } ;
+my %status_codes = ();
+my $accu = 0 ;
+while (<>) {
+    chomp ;
+
+    next unless /(Estimated|handler:)/ ;
+
+    my $mode = $1 ;
+
+    # YMD HMS
+    my ($y,$m,$d,$h,$i,$s)  = /(\d{2})(\d{2})(\d{2}) (\d{2}):(\d{2}):(\d{2})/ ;
+    $y += 2000;
+    $m -- ;
+
+    # ($sec,$min,$hour,$mday,$mon,$year)
+    $time = timegm($s,$i,$h,$d,$m,$y);
+
+    $time = int($time  / $snap) * $snap;
+
+    if ($time > $max_time) {
+        $max_time = $time;
+    }
+    if ($min_time == 0) {
+        $min_time = $time;
+    }
+
+    $completed{$time}{counter} ++  ;
+    if ($mode eq 'Estimated') {
+        if (/devices: (\d+), wait_for: ([\d\.]+)/) {
+            $completed{$time}{incoming_devices} += $1  ;
+            $completed{$time}{incoming_wait} += $2  ;
+        }
+    } elsif ($mode eq 'handler:') {
+        if (/(\d+) POST [\/\w]+ \([\d\.]+\) ([\d\.]+)ms\z/) {
+            $completed{$time}{$1} ++ ;
+            $status_codes{$1} ++ ;
+            $accu ++ ;
+            $completed{$time}{accu} = $accu ;
+        } else {
+            $completed{$time}{other} ++ ;
+        }
+    } else {
+        $completed{$time}{other} ++ ;
+    }
+
+    $total_count ++
+}
+printf("# parsed total %d entries\n", $total_count);
+printf("# time, date, %s, %s\n", join(',',@fields), join(',',sort keys %status_codes));
+
+for (my $idx = $min_time ; $idx < $max_time + $snap; $idx = $idx + $snap) {
+
+    if (!exists($completed{$idx})) {
+        printf("%s,%s,%s,%s\n",
+            $idx, scalar gmtime($idx),
+            join(',', map { 0 } @fields),
+            join(',', map { 0 } keys %status_codes));
+        next;
+    }
+
+    my $rec = $completed{$idx} ;
+
+    my $counter = $completed{$idx}{'counter'};
+    printf("%d,%s", $idx, scalar gmtime($idx));
+
+    foreach my $field (@fields) {
+        my $val = $completed{$idx}{$field} || 0;
+        printf(",%d", $val);
+    }
+    foreach my $field (sort keys %status_codes) {
+        my $val = $completed{$idx}{$field} || 0;
+        printf(",%d", $val);
+    }
+
+    printf("\n");
+
+}

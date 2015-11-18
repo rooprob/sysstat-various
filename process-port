@@ -1,0 +1,137 @@
+#!/usr/bin/perl -w
+#
+# 1358613943      0 128 mem:(r0,w0,f0,t0) 0b 0p   0       51:0:26:54:2 0MB        2336:0:262140   14000   46108   9319    SYN-SENT:0      SYN-RECV:0      ESTAB:0 FIN-WAIT-1:0    FIN-WAIT-2:0    TIME-WAIT:13    CLOSE-WAIT:0    LISTEN:1
+# 1358613945      0 128 mem:(r0,w0,f0,t0) 0b 0p   0       51:0:24:54:2 0MB        2336:0:262140   14000   46108   9319    SYN-SENT:0      SYN-RECV:0      ESTAB:0 FIN-WAIT-1:0    FIN-WAIT-2:0    TIME-WAIT:11    CLOSE-WAIT:0    LISTEN:1
+# 1358613947      0 128 mem:(r0,w0,f0,t0) 0b 0p   0       51:0:24:54:1 0MB        2336:0:262140   14000   46108   9319    SYN-SENT:0      SYN-RECV:0      ESTAB:0 FIN-WAIT-1:0    FIN-WAIT-2:0    TIME-WAIT:11    CLOSE-WAIT:0    LISTEN:1
+# 1358613949      0 128 mem:(r0,w0,f0,t0) 0b 0p   0       51:0:24:54:1 0MB        2336:0:262140   14000   46108   9319    SYN-SENT:0      SYN-RECV:0      ESTAB:0 FIN-WAIT-1:0    FIN-WAIT-2:0    TIME-WAIT:11    CLOSE-WAIT:0    LISTEN:1
+# 1358613951      0 128 mem:(r0,w0,f0,t0) 0b 0p   0       51:0:24:54:2 0MB        2336:0:262140   14000   46108   9319    SYN-SENT:0      SYN-RECV:0      ESTAB:0 FIN-WAIT-1:0    FIN-WAIT-2:0    TIME-WAIT:11    CLOSE-WAIT:0    LISTEN:1
+#
+# 127.0.0.1.36656 - 127.0.0.1.14000 [ SS., F.F., ., P. ]
+#
+# TS,         S, SA, F, FA
+# 1358614010, 1, 1,  0, 0
+# 1358614020, 1, 1,  0, 0
+#
+use strict;
+
+use Data::Dumper ;
+
+my %collapsed;
+my $headerlines = 3;
+
+sub remember_stack {
+	my ($stack, $count) = @_;
+	$collapsed{$stack} += $count;
+}
+
+my $nr = 0;
+my @stack;
+
+my $snap = 5 ;
+my $last = 0;
+my $count = 0;
+my $total_count = 0;
+my $unfinished = 0 ;
+my %completed ;
+my $min_time = 0;
+my $max_time = 0;
+my $time = 0;
+my %flags = ();
+my $flag ;
+my @state_fields = qw{ SYN-SENT SYN-RECV ESTAB FIN-WAIT-1 FIN-WAIT-2 CLOSE-WAIT LISTEN };
+my @fields = qw{ recv_q send_q dropped ss_u ss_o ss_t ss_a ss_m ss_m_mb filenr_a rss };
+while (<>) {
+    chomp ;
+
+    next if /^#/ ;
+
+    #  TIME  RECV-Q SEND-Q MEM BACKLOG_b BACKLOG_p  DROPPED  SOCKSTAT(use,orphan,tw,alloc,mem) FILENR(alloc,unused,max) PORT MEM PID (SYN-SENT:0)
+    #  1358613951      0 128 mem:(r0,w0,f0,t0) 0b 0p   0       51:0:24:54:2 0MB        2336:0:262140   14000   46108   9319    SYN-SENT:0      SYN-RECV:0      ESTAB:0 FIN-WAIT-1:0    FIN-WAIT-2:0    TIME-WAIT:11    CLOSE-WAIT:0    LISTEN:1
+
+    my ($time,
+        $recv_q, $send_q,
+        $mem,
+        $backlog_b, $backlog_p,
+        $dropped,
+        $ss_u, $ss_o, $ss_t, $ss_a, $ss_m, $ss_m_mb,
+        $filenr_a, $filenr_u, $filenr_m,
+        $port, $rss, $pid,
+        $state
+    ) = m/\A([\d\.]+)\s+
+            (\d+) \s+ (\d+) \s+
+            mem:\(([\w\,]+)\) \s+
+            (\d+)b \s+ (\d+)p \s+
+            (\d+) \s+
+            (\d+):(\d+):(\d+):(\d+):(\d+) \s (\d+)MB \s+
+            (\d+):(\d+):(\d+) \s+
+            (\d+) \s+ (\d+) \s+ (\d+) \s+
+            (.*)
+            /xms;
+            #((?:([\w\-:\d]+)\s+))+
+            #/xms ;
+    my %states;
+    while ($state =~ /(?:^|\s+)(\S+):(\d+)/g) {
+        $states{$1} = $2
+    }
+
+    $time = int($time  / $snap) * $snap;
+
+    if ($time > $max_time) {
+        $max_time = $time;
+    }
+    if ($min_time == 0) {
+        $min_time = $time;
+    }
+
+    $completed{$time}{counter} ++  ;
+    $completed{$time}{recv_q} += $recv_q ;
+    $completed{$time}{send_q} += $send_q ;
+    $completed{$time}{dropped} += $dropped ;
+    $completed{$time}{ss_u} += $ss_u ;
+    $completed{$time}{ss_o} += $ss_o ;
+    $completed{$time}{ss_t} += $ss_t ;
+    $completed{$time}{ss_a} += $ss_a ;
+    $completed{$time}{ss_m} += $ss_m ;
+    $completed{$time}{ss_m_mb} += $ss_m_mb ;
+    $completed{$time}{filenr_a} += $filenr_a;
+    $completed{$time}{rss} += $rss;
+
+    foreach my $key (keys %states) {
+        $completed{$time}{$key} += $states{$key}  ;
+    }
+
+    $total_count ++
+}
+printf("# parsed total %d entries\n", $total_count);
+printf("# time, date, %s, %s\n", join(',',@fields), join(',',@state_fields));
+
+for (my $idx = $min_time ; $idx < $max_time + $snap; $idx = $idx + $snap) {
+
+    if (!exists($completed{$idx})) {
+        printf("%s,%s,%s,%s\n",
+            $idx, scalar gmtime($idx),
+            join(',', map { 0 } @fields),
+            join(',', map { 0 } @state_fields));
+        next;
+    }
+
+    my $rec = $completed{$idx} ;
+
+    my $counter = $completed{$idx}{'counter'};
+    printf("%d,%s", $idx, scalar gmtime($idx));
+
+    foreach my $field (@fields) {
+        my $val = $completed{$idx}{$field} || 0;
+        my $avg = $val / $counter ;
+        printf(",%d", $avg);
+    }
+    foreach my $field (@state_fields) {
+        my $val = $completed{$idx}{$field} || 0;
+        my $avg = $val / $counter ;
+        printf(",%d", $avg);
+    }
+
+
+    printf("\n");
+
+}

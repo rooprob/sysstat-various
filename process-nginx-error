@@ -1,0 +1,149 @@
+#!/usr/bin/perl -w
+#
+# 2013/04/19 09:55:35 [alert] 6253#0: 4096 worker_connections are not enough
+# 2013/04/19 10:54:40 [error] 16433#0: *206031 recv() failed
+#
+use strict;
+
+use Data::Dumper ;
+use Time::Local qw{timegm};
+use Text::CSV_XS;
+
+my $snap = 5 ;
+my $last = 0;
+my $count = 0;
+my $total_count = 0;
+my $unfinished = 0 ;
+my %completed ;
+my $min_time = 0;
+my $max_time = 0;
+my $time = 0;
+my %flags = ();
+my $flag ;
+my @fields = qw{ counter error other } ;
+my %status_codes = ();
+my %months = (
+    'Jan' => 0,
+    'Feb' => 1,
+    'Mar' => 2,
+    'Apr' => 3,
+    'May' => 4,
+    'Jun' => 5,
+    'Jul' => 6,
+    'Aug' => 7,
+    'Sep' => 8,
+    'Oct' => 9,
+    'Nov' => 10,
+    'Dec' => 11,
+);
+while (<>) {
+    chomp ;
+
+    next if /==> / ;  #  ==> /var/log/nginx/upstream-root.log <==
+    next if /^$/ ;
+    # YMD HMS
+    my ($y,$m,$d,$h,$i,$s) ;
+    if (/^(\d{4})\/(\d{2})\/(\d{2}) (\d{2}):(\d{2}):(\d{2})/) {
+        ($y,$m,$d,$h,$i,$s) = ($1, $2, $3, $4, $5, $6) ;
+    } elsif (/(\d{2})\/(\w{3})\/(\d{4}):(\d{2}):(\d{2}):(\d{2})/) {
+        ($y,$m,$d,$h,$i,$s) = ($3, $months{$2}, $1, $4, $5, $6) ;
+    } else {
+        printf("debug: unknown date: %s\n", $_);
+        next;
+    }
+
+    # ($sec,$min,$hour,$mday,$mon,$year)
+    $time = timegm($s,$i,$h,$d,$m,$y);
+
+    $time = int($time  / $snap) * $snap;
+
+    if ($time > $max_time) {
+        $max_time = $time;
+    }
+    if ($min_time == 0) {
+        $min_time = $time;
+    }
+
+    $completed{$time}{counter} ++  ;
+
+    if (/\"(GET|POST|\-|HEAD|PUT) ([^\?]+)(\?.*)? HTTP\/\d\.\d\" (\d+)/) {
+        $completed{$time}{ $2 } ++ ;
+        $status_codes{ $2 } ++ ;
+        $completed{$time}{ $1 } ++ ;
+        $status_codes{ $1 } ++ ;
+    } elsif (/HEAD \/ HTTP\/1\.1\" 200 0 \"\-\" \"\-\"/) {
+        $completed{$time}{ HAPrxy } ++ ;
+        $status_codes{ HAPrxy} ++ ;
+
+    } elsif ( /\".*(?:\\x)[^\"]+" (\d+) \d+ "-" "-"/ ) {
+        # d\xFA\x94\x02\xB7^-\xFF/L\xBF\xD6\x0BI\xDC \xC5\xAC\xD6\x1C\xD9\
+        $completed{$time}{ $1 } ++ ;
+        $status_codes{ $1 } ++ ;
+        $completed{$time}{ ESSL } ++ ;
+        $status_codes{ ESSL } ++ ;
+
+    } elsif (/\"-\" (\d+)/) {
+        $completed{$time}{ $1 } ++ ;
+        $status_codes{ $1 } ++ ;
+    } elsif (/\[error\]/) {
+        $completed{$time}{ error } ++ ;
+
+        if (/refused/) {
+            $completed{$time}{ ERefused } ++ ;
+            $status_codes{ ERefused} ++ ;
+        } elsif (/timeout/) {
+            $completed{$time}{ ETimeOut } ++ ;
+            $status_codes{ EETimeOut } ++ ;
+        } elsif (/forbidden/) {
+            $completed{$time}{ EForbidden } ++ ;
+            $status_codes{ EForbidden } ++ ;
+        } elsif (/No such file or directory/) {
+            $completed{$time}{ ENoSuch } ++ ;
+            $status_codes{ ENoSuch } ++ ;
+        } elsif (/not found/) {
+            $completed{$time}{ ENotFound } ++ ;
+            $status_codes{ ENotFound } ++ ;
+        } elsif (/timed out/) {
+            $completed{$time}{ ETimeOut } ++ ;
+            $status_codes{ ETimeOut } ++ ;
+        } elsif (/prematurely closed/) {
+            $completed{$time}{ EPremClosed } ++ ;
+            $status_codes{ EPremClosed } ++ ;
+        } else {
+            printf("debug: other: %s\n", $_);
+            $completed{$time}{other} ++ ;
+        }
+    } else {
+        printf("debug: other: %s\n", $_);
+        $completed{$time}{other} ++ ;
+    }
+
+    $total_count ++
+}
+
+my $tab = Text::CSV_XS->new({ binary => 1, eol => "\n" });
+
+$tab->print(\*STDOUT, ['time','date', @fields, sort keys %status_codes]);
+
+for (my $idx = $min_time ; $idx < $max_time + $snap; $idx = $idx + $snap) {
+
+    if (!exists($completed{$idx})) {
+        $tab->print(\*STDOUT, [$idx, scalar gmtime($idx), map { 0 } @fields, map { 0 } keys %status_codes]);
+        next;
+    }
+
+    my $rec = $completed{$idx} ;
+
+    my $counter = $completed{$idx}{'counter'};
+
+    my @fresults = ($idx, scalar gmtime($idx));
+    foreach my $field (@fields) {
+        push @fresults, $completed{$idx}{$field} || 0;
+    }
+    foreach my $field (sort keys %status_codes) {
+        push @fresults, $completed{$idx}{$field} || 0;
+    }
+
+    $tab->print(\*STDOUT, \@fresults) ;
+
+}

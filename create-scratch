@@ -1,0 +1,10 @@
+#!/bin/bash
+
+report_dir="/var/tmp/$USER/scratch/"$(date +"%F-%s")
+mkdir -p $report_dir
+
+echo "info: setup $report_dir"
+
+export PATH=$(pwd):$PATH
+
+cd $report_dir

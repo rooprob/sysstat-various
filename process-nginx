@@ -1,0 +1,171 @@
+#!/usr/bin/perl -w
+#
+# 10.136.123.58 - 112.120.89.159 - [29/Apr/2013:08:42:58 +0000] "POST /v1/command/push HTTP/1.1" 200 upstream 0.026 request 0.026 [for api-dev.env.local via 127.0.0.1:25000]
+# 10.136.123.58 - 112.120.89.159 - [29/Apr/2013:08:42:59 +0000] "POST /v1/command/fetch HTTP/1.1" 200 upstream 0.016 request 0.016 [for api-dev.env.local via 127.0.0.1:25000]
+# 2013/04/28 08:22:50 [error] 24564#0: *80820 open() "/var/www/nginx-default/sprawdza.php" failed (2: No such file or directory), client: 176.61.139.107, server: api.env.local, request: "GET http://37.28.156.211/sprawdza.php HTTP/1.1", host: "37.28.156.211"
+# 2013/04/28 14:38:27 [error] 24565#0: *84119 open() "/var/www/nginx-default/azenv.php" failed (2: No such file or directory), client: 10.136.123.58, server: api.env.local, request: "GET /azenv.php HTTP/1.1", host: "server6.cyberpods.net"
+#
+# process-nginx log/nginx/upstream-command.log  log/nginx/error.log
+#
+# time,date,counter,error,other,upstream_tot,/command/echo,/command/fetch,/command/push,/command/version,/v1/command/echo,/v1/command/fetch,/v1/command/push,EConnReset,ENoSuch,ERefused,ETimeOut,GET,POST
+# 1367205180,"Mon Apr 29 03:13:00 2013",2,0,0,0.031,0,0,0,0,0,1,1,0,0,0,0,0,2
+# 1367205185,"Mon Apr 29 03:13:05 2013",1,0,0,0.016,0,0,0,0,0,1,0,0,0,0,0,0,1
+# 1367205190,"Mon Apr 29 03:13:10 2013",0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
+#
+use strict;
+
+use Data::Dumper ;
+use Time::Local qw{timegm};
+use Text::CSV_XS;
+
+my $snap = 5 ;
+my $last = 0;
+my $count = 0;
+my $total_count = 0;
+my $unfinished = 0 ;
+my %completed ;
+my $min_time = 0;
+my $max_time = 0;
+my $time = 0;
+my %flags = ();
+my $flag ;
+my @fields = qw{ counter error other upstream_tot } ;
+my %status_codes = ();
+my %months = (
+    'Jan' => 0,
+    'Feb' => 1,
+    'Mar' => 2,
+    'Apr' => 3,
+    'May' => 4,
+    'Jun' => 5,
+    'Jul' => 6,
+    'Aug' => 7,
+    'Sep' => 8,
+    'Oct' => 9,
+    'Nov' => 10,
+    'Dec' => 11,
+);
+while (<>) {
+    chomp ;
+
+    next if /==> / ;  #  ==> /var/log/nginx/upstream-root.log <==
+    next if /^$/ ;
+    # YMD HMS
+    my ($y,$m,$d,$h,$i,$s) ;
+    if (/^(\d{4})\/(\d{2})\/(\d{2}) (\d{2}):(\d{2}):(\d{2})/) {
+        ($y,$m,$d,$h,$i,$s) = ($1, $2, $3, $4, $5, $6) ;
+        $m -- ;
+    } elsif (/(\d{2})\/(\w{3})\/(\d{4}):(\d{2}):(\d{2}):(\d{2})/) {
+        ($y,$m,$d,$h,$i,$s) = ($3, $months{$2}, $1, $4, $5, $6) ;
+    } else {
+        printf("debug: unknown date: %s\n", $_);
+        next;
+    }
+
+    # ($sec,$min,$hour,$mday,$mon,$year)
+    $time = timegm($s,$i,$h,$d,$m,$y);
+
+    $time = int($time  / $snap) * $snap;
+
+    if ($time > $max_time) {
+        $max_time = $time;
+    }
+    if ($min_time == 0) {
+        $min_time = $time;
+    }
+
+    $completed{$time}{counter} ++  ;
+
+    if (/upstream ([\d\.]+)/) {
+        # total time spent upstream in this $time interval
+        $completed{$time}{'upstream_tot'} += $1 ;
+    }
+
+
+    if (/\"(GET|POST|\-|HEAD|PUT) ([^\?]+)(\?.*)? HTTP\/\d\.\d\" (\d+)/) {
+        $completed{$time}{ $2 } ++ ;
+        $status_codes{ $2 } ++ ;
+        $completed{$time}{ $1 } ++ ;
+        $status_codes{ $1 } ++ ;
+    } elsif (/HEAD \/ HTTP\/1\.1\" 200 0 \"\-\" \"\-\"/) {
+        $completed{$time}{ HAPrxy } ++ ;
+        $status_codes{ HAPrxy} ++ ;
+
+    } elsif ( /\".*(?:\\x)[^\"]+" (\d+) \d+ "-" "-"/ ) {
+        # d\xFA\x94\x02\xB7^-\xFF/L\xBF\xD6\x0BI\xDC \xC5\xAC\xD6\x1C\xD9\
+        $completed{$time}{ $1 } ++ ;
+        $status_codes{ $1 } ++ ;
+        $completed{$time}{ ESSL } ++ ;
+        $status_codes{ ESSL } ++ ;
+
+    } elsif (/\"-\" (\d+)/) {
+        $completed{$time}{ $1 } ++ ;
+        $status_codes{ $1 } ++ ;
+    } elsif (/\[error|alert\]/) {
+        $completed{$time}{ error } ++ ;
+
+        if (/refused/) {
+            $completed{$time}{ ERefused } ++ ;
+            $status_codes{ ERefused} ++ ;
+        } elsif (/timeout/) {
+            $completed{$time}{ ETimeOut } ++ ;
+            $status_codes{ EETimeOut } ++ ;
+        } elsif (/forbidden/) {
+            $completed{$time}{ EForbidden } ++ ;
+            $status_codes{ EForbidden } ++ ;
+        } elsif (/No such file or directory/) {
+            $completed{$time}{ ENoSuch } ++ ;
+            $status_codes{ ENoSuch } ++ ;
+        } elsif (/not found/) {
+            $completed{$time}{ ENotFound } ++ ;
+            $status_codes{ ENotFound } ++ ;
+        } elsif (/timed out/) {
+            $completed{$time}{ ETimeOut } ++ ;
+            $status_codes{ ETimeOut } ++ ;
+        } elsif (/worker_connections/) {
+            $completed{$time}{ EWorkerConn } ++ ;
+            $status_codes{ EWorkerConn } ++;
+        } elsif (/Connection reset by peer/) {
+            $completed{$time}{ EConnReset } ++ ;
+            $status_codes{ EConnReset } ++ ;
+        } elsif (/prematurely closed/) {
+            $completed{$time}{ EPremClosed } ++ ;
+            $status_codes{ EPremClosed } ++ ;
+        } else {
+            printf("debug: other: %s\n", $_);
+            $completed{$time}{other} ++ ;
+        }
+    } else {
+        printf("debug: other: %s\n", $_);
+        $completed{$time}{other} ++ ;
+    }
+
+    $total_count ++
+}
+
+my $tab = Text::CSV_XS->new({ binary => 1, eol => "\n" });
+
+$tab->print(\*STDOUT, ['time','date', @fields, sort keys %status_codes]);
+
+for (my $idx = $min_time ; $idx < $max_time + $snap; $idx = $idx + $snap) {
+
+    if (!exists($completed{$idx})) {
+        $tab->print(\*STDOUT, [$idx, scalar gmtime($idx), map { 0 } @fields, map { 0 } keys %status_codes]);
+        next;
+    }
+
+    my $rec = $completed{$idx} ;
+
+    my $counter = $completed{$idx}{'counter'};
+
+    my @fresults = ($idx, scalar gmtime($idx));
+    foreach my $field (@fields) {
+        push @fresults, $completed{$idx}{$field} || 0;
+    }
+    foreach my $field (sort keys %status_codes) {
+        push @fresults, $completed{$idx}{$field} || 0;
+    }
+
+    $tab->print(\*STDOUT, \@fresults) ;
+
+}

@@ -14,8 +14,19 @@
 #
 use strict;
 use warnings;
+use Getopt::Long;
 
+my $start;
+my $end;
 my $interval = 5 ;
+GetOptions (
+    "start=i"    => \$start,
+    "end=i"      => \$end,
+    "interval=i" => \$interval);
+
+# snap start/end time to interval
+$start = int($start / $interval) * $interval if $start;
+$end = int($end / $interval) * $interval if $end;
 
 my %completed ;
 my $min_time = 0;
@@ -33,17 +44,23 @@ my %flags = (
 while (<>) {
     my ($timestamp) = (/^([\d\.]+)/) ;
     next unless $timestamp;
+    $timestamp = int($timestamp / $interval) * $interval;
+    next if $start && $start > $timestamp;
+    last if $end && $end < $timestamp;
 
     die ("unexpected flag at $_") unless /Flags \[([SFRP\.]+)\]/ ;
     my $flag = $flags{$1} || $1;
 
-    $timestamp = int($timestamp / $interval) * $interval;
 
     $max_time = $timestamp if ($timestamp > $max_time);
     $min_time = $timestamp if ($min_time == 0);
 
     $completed{$timestamp}{$flag} ++ ;
 }
+
+# Ensure report duration snapped to getops values
+$min_time = $start if $start && $min_time > $start;
+$max_time = $end if $end && $max_time < $end;
 
 printf("timestamp,gmdate,tzdate,%s\n", join(',',@flags));
 for (my $idx = $min_time;

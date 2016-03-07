@@ -2,7 +2,7 @@
 #
 # graph-onboarding <process-tcp>
 #
-#   - process-tcp          time,date,SYN,SYNACK,FIN
+#   - process-tcp          time,gmdate,localdate,SYN,SYNACK,FIN
 #
 traffic_file=$1
 
@@ -17,8 +17,8 @@ echo "set xdata time"
 echo "set timefmt \"%s\""
 echo "set format x \"%H:%M\""     # or anything else
 echo "set title \"TCP connections\""
-echo "plot \"$traffic_file\" using 1:3 t \"SYN/s\" w boxes fill solid 1.0, \\"
-echo "     '' using 1:4 t \"SYN-ACK/s\" w boxes fill solid 1.0, \\"
-echo "     '' using 1:5 t \"FIN/s\" w boxes fill solid 1.0, \\"
-echo "     '' using 1:6 t \"RST/s\" w boxes"
+echo "plot \"$traffic_file\" using 1:4 t \"SYN/s\" w boxes fill solid 1.0, \\"
+echo "     '' using 1:5 t \"SYN-ACK/s\" w boxes fill solid 1.0, \\"
+echo "     '' using 1:6 t \"FIN/s\" w boxes fill solid 1.0, \\"
+echo "     '' using 1:7 t \"RST/s\" w boxes"
 ) | gnuplot > ${traffic_file}.png

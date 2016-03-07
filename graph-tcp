@@ -1,6 +1,6 @@
 #!/bin/bash
 #
-# graph-onboarding <process-tcp>
+# graph-tcp <process-tcp>
 #
 #   - process-tcp          time,gmdate,localdate,SYN,SYNACK,FIN
 #

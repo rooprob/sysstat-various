@@ -1,99 +1,54 @@
 #!/usr/bin/perl -w
 #
-#1358614014.474113 IP 127.0.0.1.36656 > 127.0.0.1.14000: Flags [S], seq 1883124844, win 12288, options [mss 16396,nop,nop,sackOK,nop,wscale 10], length 0
-#1358614014.474147 IP 127.0.0.1.14000 > 127.0.0.1.36656: Flags [S.], seq 2896662404, ack 1883124845, win 12288, options [mss 16396,nop,nop,sackOK,nop,wscale 10], length 0
-#1358614014.474169 IP 127.0.0.1.36656 > 127.0.0.1.14000: Flags [.], ack 1, win 12, length 0
-#1358614014.474261 IP 127.0.0.1.36656 > 127.0.0.1.14000: Flags [P.], seq 1:180, ack 1, win 12, length 179
-#1358614014.474302 IP 127.0.0.1.14000 > 127.0.0.1.36656: Flags [.], ack 180, win 14, length 0
-# turn into
+# tcpdump -nn -tt -r file.pcap 'tcp[tcpflags] & (tcp-syn|tcp-fin) != 0' |  process-tcp > file.csv
 #
-# 127.0.0.1.36656 - 127.0.0.1.14000 [ SS., F.F., ., P. ]
+# 1358614014.474113 IP 127.0.0.1.36656 > 127.0.0.1.14000: Flags [S], seq 1883124844, win 12288,
+# 1358614014.474147 IP 127.0.0.1.14000 > 127.0.0.1.36656: Flags [S.], seq 2896662404, ack 1883124845,
+# 1358614014.474169 IP 127.0.0.1.36656 > 127.0.0.1.14000: Flags [.], ack 1, win 12, length 0
+# 1358614014.474261 IP 127.0.0.1.36656 > 127.0.0.1.14000: Flags [P.], seq 1:180, ack 1, win 12, length 179
+# 1358614014.474302 IP 127.0.0.1.14000 > 127.0.0.1.36656: Flags [.], ack 180, win 14, length 0
 #
 # TS,         S, SA, F, FA
 # 1358614010, 1, 1,  0, 0
 # 1358614020, 1, 1,  0, 0
 #
-#  tcpdump -nn -tt -r file.pcap 'tcp[tcpflags] & #  (tcp-syn|tcp-fin) != 0' |  process-tcp > file.csv
 use strict;
+use warnings;
 
-my %collapsed;
-my $headerlines = 3;
+my $interval = 5 ;
 
-sub remember_stack {
-	my ($stack, $count) = @_;
-	$collapsed{$stack} += $count;
-}
-
-my $nr = 0;
-my @stack;
-
-my $snap = 5 ;
-my $last = 0;
-my $count = 0;
-my $total_count = 0;
-my $unfinished = 0 ;
 my %completed ;
 my $min_time = 0;
 my $max_time = 0;
-my $time = 0;
-my @flags = qw ( SYN SYN-ACK FIN RST );
-my $flag ;
+my @flags = qw(SYN SYNACK FIN RST);
+my %flags = (
+    'S'  => 'SYN',
+    'S.' => 'SYNACK',
+    'F.' => 'FIN',
+    'R'  => 'RST'
+);
+
+# Collect all input into summary of flag counts, indexed by time.
+# Time is bucketed by $interval.
 while (<>) {
-    chomp ;
+    my ($timestamp) = (/^([\d\.]+)/) ;
+    next unless $timestamp;
 
-    ($time) = /^([\d\.]+)\s/ ;
+    die ("unexpected flag at $_") unless /Flags \[([SFRP\.]+)\]/ ;
+    my $flag = $flags{$1} || $1;
 
-    if ( /Flags \[([SFRP\.]+)\]/ ) {
-        if ($1 eq 'S') {
-            $flag = 'SYN';
-        } elsif ($1 eq 'S.') {
-            $flag = 'SYN-ACK';
-        } elsif ($1 eq 'F.') {
-            $flag = 'FIN';
-        } elsif ($1 eq 'R') {
-            $flag = 'RST';
-        } else {
-            next;
-        }
-    } else {
-        die ("unexpected flag at $_");
-    }
+    $timestamp = int($timestamp / $interval) * $interval;
 
-    # printf("debug: %d %s\n", $time, $flag);
+    $max_time = $timestamp if ($timestamp > $max_time);
+    $min_time = $timestamp if ($min_time == 0);
 
-    $time = int($time  / $snap) * $snap;
-
-    if ($time > $max_time) {
-        $max_time = $time;
-    }
-    if ($min_time == 0) {
-        $min_time = $time;
-    }
-    $completed{$time}{$flag} ++  ;
-
-=snip
-    if ($time ne $last) {
-        if ($last != 0) {
-            printf("%d %d\n", $time, $count);
-
-            $count = 1;
-
-            $last = $time;
-        } else {
-            $last = $time;
-            $count = 1;
-        }
-    } else {
-        $count ++ ;
-    }
-=cut
-
+    $completed{$timestamp}{$flag} ++ ;
 }
 
-printf("# parsed total %d syscalls, %d unfinished\n", $total_count, $unfinished);
-printf("# time, date, %s\n", join(',',@flags));
-for (my $idx = $min_time ; $idx < $max_time + $snap; $idx = $idx + $snap) {
+printf("# timestamp, date, %s\n", join(',',@flags));
+for (my $idx = $min_time; $idx < $max_time + $interval; $idx = $idx + $interval) {
 
+    # normalise report to include missing intervals
     if (!exists($completed{$idx})) {
         printf("%s,%s,%s\n",
             $idx, scalar gmtime($idx),
@@ -101,10 +56,7 @@ for (my $idx = $min_time ; $idx < $max_time + $snap; $idx = $idx + $snap) {
         next;
     }
 
-    printf("%d,%s", $idx, scalar gmtime($idx));
-    foreach my $flag (@flags) {
-        printf(",%d", $completed{$idx}{$flag} || 0);
-    }
-    printf("\n");
-
+    printf("%d,%s,%s\n",
+        $idx, scalar gmtime($idx),
+        join(',', map { $completed{$idx}{$_} || 0 } @flags));
 }

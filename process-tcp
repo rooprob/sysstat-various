@@ -45,18 +45,14 @@ while (<>) {
     $completed{$timestamp}{$flag} ++ ;
 }
 
-printf("# timestamp, date, %s\n", join(',',@flags));
-for (my $idx = $min_time; $idx < $max_time + $interval; $idx = $idx + $interval) {
-
-    # normalise report to include missing intervals
-    if (!exists($completed{$idx})) {
-        printf("%s,%s,%s\n",
-            $idx, scalar gmtime($idx),
-            join(',', map { 0 } @flags));
-        next;
-    }
-
-    printf("%d,%s,%s\n",
-        $idx, scalar gmtime($idx),
+printf("timestamp,gmdate,tzdate,%s\n", join(',',@flags));
+for (my $idx = $min_time;
+    $idx < $max_time + $interval;
+    $idx = $idx + $interval
+) {
+    printf("%d,%s,%s,%s\n",
+        $idx,
+        scalar gmtime($idx),
+        scalar localtime($idx),
         join(',', map { $completed{$idx}{$_} || 0 } @flags));
 }

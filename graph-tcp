@@ -1,24 +1,25 @@
 #!/bin/bash
 #
-# graph-tcp <process-tcp>
+# graph-tcp "title" <process-tcp>
 #
 #   - process-tcp          time,gmdate,localdate,SYN,SYNACK,FIN
 #
-traffic_file=$1
+title=$1
+traffic_file=$2
 
 (
 echo "set terminal png size 1000,600"
 echo "set multiplot layout 2,1"
 echo "set datafile separator \",\""
 echo "set xlabel \"Time Elapsed\""
-echo "set ylabel \"Connections\""
+echo "set ylabel \"TCP Packets/s\""
 # echo "set boxwidth 1.0"
 echo "set xdata time"
 echo "set timefmt \"%s\""
-echo "set format x \"%H:%M\""     # or anything else
-echo "set title \"TCP connections\""
-echo "plot \"$traffic_file\" using 1:4 t \"SYN/s\" w boxes fill solid 1.0, \\"
-echo "     '' using 1:5 t \"SYN-ACK/s\" w boxes fill solid 1.0, \\"
-echo "     '' using 1:6 t \"FIN/s\" w boxes fill solid 1.0, \\"
-echo "     '' using 1:7 t \"RST/s\" w boxes"
+echo "set format x \"%H:%M:%S\""     # or anything else
+echo "set title \"${title} TCP Packets/s\""
+echo "plot \"$traffic_file\" using 1:4 t \"SYN/s\" with linespoints\\"
+echo "     ,'' using 1:5 t \"SYN-ACK/s\" with linespoints\\"
+echo "     ,'' using 1:6 t \"FIN/s\" with linespoints\\"
+echo "     ,'' using 1:7 t \"RST/s\" with boxes"
 ) | gnuplot > ${traffic_file}.png

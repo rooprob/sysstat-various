@@ -20,7 +20,7 @@ use Getopt::Long;
 
 my $start;
 my $end;
-my $interval = 1 ;
+my $interval = 5 ;
 GetOptions (
     "start=i"    => \$start,
     "end=i"      => \$end,

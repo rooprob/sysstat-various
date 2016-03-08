@@ -1,0 +1,76 @@
+#!/usr/bin/perl -w
+#
+# $ /usr/local/bin/tcpstat -r tcpdump-ip-10-0-4-11.us-west-2.compute.internal-2016-03-07.pcap -o "%s\t%T\n"
+# 1457322509.138059	12
+# 1457322514.138059	8
+# 1457322519.138059	11
+# 1457322524.138059	8
+# 1457322529.138059	1103
+# 1457322534.138059	3678
+# 1457322539.138059	6080
+# 1457322544.138059	8107
+# 1457322549.138059	10299
+# 1457322554.138059	11453
+#
+# TS,         S, SA, F, FA
+# 1358614010,
+# 1358614020, 1, 1,  0, 0
+#
+use strict;
+use warnings;
+use Getopt::Long;
+
+my $start;
+my $end;
+my $interval = 5 ;
+GetOptions (
+    "start=i"     => \$start,
+    "end=i"       => \$end,
+    "interval=i"  => \$interval);
+
+# snap start/end time to interval
+$start = int($start / $interval) * $interval if $start;
+$end = int($end / $interval) * $interval if $end;
+
+my %completed ;
+my $min_time = 0;
+my $max_time = 0;
+
+# Collect all input into summary of flag counts, indexed by time.
+# Time is bucketed by $interval.
+for my $filename (@ARGV) {
+	open(my $fh, '-|', "tcpstat -r $filename -o \"%s\t%T\n\"");
+	while (<$fh>) {
+		my ($timestamp, $total) = (/^([\d\.]+)\t(\d+)$/) ;
+		next unless $timestamp;
+		$timestamp = int($timestamp / $interval) * $interval;
+		next if $start && $start > $timestamp;
+		last if $end && $end < $timestamp;
+
+		$max_time = $timestamp if ($timestamp > $max_time);
+		$min_time = $timestamp if ($min_time == 0);
+
+		$completed{$timestamp} += $total;
+
+	}
+	close($fh);
+}
+# Ensure report duration snapped to getops values
+$min_time = $start if $start && $min_time > $start;
+$max_time = $end if $end && $max_time < $end;
+
+printf("timestamp,gmdate,tzdate,total,hist\n");
+for (my $idx = $min_time;
+    $idx < $max_time + $interval;
+    $idx = $idx + $interval
+) {
+    my $total = $completed{$idx} || 0;
+    my $avg = $total/$interval;
+    printf("%d,%s,%s,%d,%.2f,%s\n",
+        $idx,
+        scalar gmtime($idx),
+        scalar localtime($idx),
+		$total,
+		$avg,
+        '.' x ($total/(2000/45)));
+}

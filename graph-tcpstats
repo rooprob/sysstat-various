@@ -1,15 +1,25 @@
 #!/bin/bash
+#
+# graph-tcpstat "title" <process-tcp>
+#
+#     process-tcpstat
+#       tcpstat -r $tcpdump_file -o "%R\t%T\n" 5 > ${tcpdump_file}.tcpstat
+#
 
-tcpdump_file=$1
-
-tcpstat -r $tcpdump_file -o "%R\t%T\n" 5 > ${tcpdump_file}.tcpstat
+title=$1
+tcpdump_file=$2
 
 (
 echo "set terminal png size 1000,600"
-echo "set grid"
-echo "set yrange [ -10 :  ]"
-echo "set title \"TCP breakdown\""
-echo "set xlabel \"seconds\""
-echo "set ylabel \"packets/s\""
-echo "plot \"${tcpdump_file}.tcpstat\" using 1:(\$2/5) smooth csplines title \"TCP\""
+echo "set multiplot layout 2,1"
+echo "set datafile separator \",\""
+echo "set xlabel \"Time Elapsed\""
+echo "set ylabel \"TCP Packets/s\""
+# echo "set boxwidth 1.0"
+echo "set xdata time"
+echo "set timefmt \"%s\""
+echo "set format x \"%H:%M:%S\""     # or anything else
+echo "set title \"${title} TCP\""
+echo "plot \"${tcpdump_file}\" using 1:5 smooth csplines title \"TCP/s\"\\"
+echo "     ,'' using 1:4 t \"Total\" with linespoints\\"
 ) | gnuplot > ${tcpdump_file}.png

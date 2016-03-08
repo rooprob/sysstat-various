@@ -1,5 +1,7 @@
 #!/usr/bin/perl -w
 #
+# Return the number of SYN,SYNACK,FIN,RST per second.
+#
 # tcpdump -nn -tt -r file.pcap 'tcp[tcpflags] & (tcp-syn|tcp-fin) != 0' |  process-tcp > file.csv
 #
 # 1358614014.474113 IP 127.0.0.1.36656 > 127.0.0.1.14000: Flags [S], seq 1883124844, win 12288,
@@ -8,7 +10,7 @@
 # 1358614014.474261 IP 127.0.0.1.36656 > 127.0.0.1.14000: Flags [P.], seq 1:180, ack 1, win 12, length 179
 # 1358614014.474302 IP 127.0.0.1.14000 > 127.0.0.1.36656: Flags [.], ack 180, win 14, length 0
 #
-# TS,         S, SA, F, FA
+# TS,         S, SA, F, R
 # 1358614010, 1, 1,  0, 0
 # 1358614020, 1, 1,  0, 0
 #
@@ -18,7 +20,7 @@ use Getopt::Long;
 
 my $start;
 my $end;
-my $interval = 5 ;
+my $interval = 1 ;
 GetOptions (
     "start=i"    => \$start,
     "end=i"      => \$end,
@@ -50,26 +52,25 @@ while (<>) {
 
     die ("unexpected flag at $_") unless /Flags \[([SFRP\.]+)\]/ ;
     my $flag = $flags{$1} || $1;
-
-
     $max_time = $timestamp if ($timestamp > $max_time);
     $min_time = $timestamp if ($min_time == 0);
-
     $completed{$timestamp}{$flag} ++ ;
 }
 
 # Ensure report duration snapped to getops values
 $min_time = $start if $start && $min_time > $start;
 $max_time = $end if $end && $max_time < $end;
-
 printf("timestamp,gmdate,tzdate,%s\n", join(',',@flags));
 for (my $idx = $min_time;
     $idx < $max_time + $interval;
     $idx = $idx + $interval
 ) {
+
+    # compute the average over $interval
+    my @avg_set = map { ($completed{$idx}{$_} || 0) / $interval} @flags ;
     printf("%d,%s,%s,%s\n",
         $idx,
         scalar gmtime($idx),
         scalar localtime($idx),
-        join(',', map { $completed{$idx}{$_} || 0 } @flags));
+        join(',', @avg_set));
 }

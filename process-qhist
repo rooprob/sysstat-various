@@ -1,0 +1,58 @@
+#!/usr/bin/perl -w
+#
+use strict;
+use warnings;
+use Date::Parse;
+use Getopt::Long;
+
+my $graph = 1000;
+my $start;
+my $end;
+my $interval = 1 ;
+GetOptions (
+    "graph=i"    => \$graph,
+    "start=i"    => \$start,
+    "end=i"      => \$end,
+    "interval=i" => \$interval);
+
+# snap start/end time to interval
+$start = int($start / $interval) * $interval if $start;
+$end = int($end / $interval) * $interval if $end;
+
+my %completed ;
+my $min_time = 0;
+my $max_time = 0;
+my $timestamp;
+
+while (<>) {
+    next unless /(\w{3}\s+\d+\s+\d{2}:\d{2}:\d{2}|\d{4}\-\d{2}\S+|\d{10}\.\d{6})/;
+    $timestamp = str2time($1) unless /(\d{10}\.\d{6})/;
+    $timestamp = $1 if /(\d{10}\.\d{6})/;
+    next unless $timestamp;
+    $timestamp = int($timestamp / $interval) * $interval;
+    next if $start && $start >= $timestamp;
+    last if $end && $end < $timestamp;
+    $max_time = $timestamp if ($timestamp > $max_time);
+    $min_time = $timestamp if ($min_time == 0);
+
+    $completed{$timestamp} ++;
+}
+
+# Ensure report duration snapped to getops values
+$min_time = $start if $start && $min_time > $start;
+$max_time = $end if $end && $max_time < $end;
+printf("timestamp,gmdate,tzdate,total,avg/%ds,histogram\n",$interval);
+for (my $idx = $min_time;
+    $idx < $max_time + $interval;
+    $idx = $idx + $interval
+) {
+    my $total = $completed{$idx} || 0;
+    my $avg = $total / $interval ;
+    printf("%d,%s,%s,%5d,%5.1f, %s\n",
+        $idx,
+        scalar gmtime($idx),
+        scalar localtime($idx),
+        $total,
+        $avg,
+        '.' x ($total/($graph/45)));
+}

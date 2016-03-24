@@ -13,22 +13,27 @@
 # 1367205190,"Mon Apr 29 03:13:10 2013",0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
 #
 use strict;
-
+use warnings;
 use Data::Dumper ;
 use Time::Local qw{timegm};
 use Text::CSV_XS;
 
-my $snap = 5 ;
-my $last = 0;
-my $count = 0;
-my $total_count = 0;
-my $unfinished = 0 ;
+my $start;
+my $end;
+my $interval = 5 ;
+GetOptions (
+    "start=i"    => \$start,
+    "end=i"      => \$end,
+    "interval=i" => \$interval);
+
+# snap start/end time to interval
+$start = int($start / $interval) * $interval if $start;
+$end = int($end / $interval) * $interval if $end;
+
 my %completed ;
 my $min_time = 0;
 my $max_time = 0;
-my $time = 0;
-my %flags = ();
-my $flag ;
+my $timestamp = 0;
 my @fields = qw{ counter error other upstream_tot } ;
 my %status_codes = ();
 my %months = (
@@ -63,84 +68,82 @@ while (<>) {
     }
 
     # ($sec,$min,$hour,$mday,$mon,$year)
-    $time = timegm($s,$i,$h,$d,$m,$y);
+    $timestamp = timegm($s,$i,$h,$d,$m,$y);
 
-    $time = int($time  / $snap) * $snap;
+    $timestamp = int($timestamp  / $snap) * $snap;
 
-    if ($time > $max_time) {
-        $max_time = $time;
+    if ($timestamp > $max_time) {
+        $max_time = $timestamp;
     }
     if ($min_time == 0) {
-        $min_time = $time;
+        $min_time = $timestamp;
     }
 
-    $completed{$time}{counter} ++  ;
+    $completed{$timestamp}{counter} ++  ;
 
     if (/upstream ([\d\.]+)/) {
-        # total time spent upstream in this $time interval
-        $completed{$time}{'upstream_tot'} += $1 ;
+        # total time spent upstream in this $timestamp interval
+        $completed{$timestamp}{'upstream_tot'} += $1 ;
     }
 
 
     if (/\"(GET|POST|\-|HEAD|PUT) ([^\?]+)(\?.*)? HTTP\/\d\.\d\" (\d+)/) {
-        $completed{$time}{ $2 } ++ ;
+        $completed{$timestamp}{ $2 } ++ ;
         $status_codes{ $2 } ++ ;
-        $completed{$time}{ $1 } ++ ;
+        $completed{$timestamp}{ $1 } ++ ;
         $status_codes{ $1 } ++ ;
     } elsif (/HEAD \/ HTTP\/1\.1\" 200 0 \"\-\" \"\-\"/) {
-        $completed{$time}{ HAPrxy } ++ ;
+        $completed{$timestamp}{ HAPrxy } ++ ;
         $status_codes{ HAPrxy} ++ ;
 
     } elsif ( /\".*(?:\\x)[^\"]+" (\d+) \d+ "-" "-"/ ) {
         # d\xFA\x94\x02\xB7^-\xFF/L\xBF\xD6\x0BI\xDC \xC5\xAC\xD6\x1C\xD9\
-        $completed{$time}{ $1 } ++ ;
+        $completed{$timestamp}{ $1 } ++ ;
         $status_codes{ $1 } ++ ;
-        $completed{$time}{ ESSL } ++ ;
+        $completed{$timestamp}{ ESSL } ++ ;
         $status_codes{ ESSL } ++ ;
 
     } elsif (/\"-\" (\d+)/) {
-        $completed{$time}{ $1 } ++ ;
+        $completed{$timestamp}{ $1 } ++ ;
         $status_codes{ $1 } ++ ;
     } elsif (/\[error|alert\]/) {
-        $completed{$time}{ error } ++ ;
+        $completed{$timestamp}{ error } ++ ;
 
         if (/refused/) {
-            $completed{$time}{ ERefused } ++ ;
+            $completed{$timestamp}{ ERefused } ++ ;
             $status_codes{ ERefused} ++ ;
         } elsif (/timeout/) {
-            $completed{$time}{ ETimeOut } ++ ;
+            $completed{$timestamp}{ ETimeOut } ++ ;
             $status_codes{ EETimeOut } ++ ;
         } elsif (/forbidden/) {
-            $completed{$time}{ EForbidden } ++ ;
+            $completed{$timestamp}{ EForbidden } ++ ;
             $status_codes{ EForbidden } ++ ;
         } elsif (/No such file or directory/) {
-            $completed{$time}{ ENoSuch } ++ ;
+            $completed{$timestamp}{ ENoSuch } ++ ;
             $status_codes{ ENoSuch } ++ ;
         } elsif (/not found/) {
-            $completed{$time}{ ENotFound } ++ ;
+            $completed{$timestamp}{ ENotFound } ++ ;
             $status_codes{ ENotFound } ++ ;
         } elsif (/timed out/) {
-            $completed{$time}{ ETimeOut } ++ ;
+            $completed{$timestamp}{ ETimeOut } ++ ;
             $status_codes{ ETimeOut } ++ ;
         } elsif (/worker_connections/) {
-            $completed{$time}{ EWorkerConn } ++ ;
+            $completed{$timestamp}{ EWorkerConn } ++ ;
             $status_codes{ EWorkerConn } ++;
         } elsif (/Connection reset by peer/) {
-            $completed{$time}{ EConnReset } ++ ;
+            $completed{$timestamp}{ EConnReset } ++ ;
             $status_codes{ EConnReset } ++ ;
         } elsif (/prematurely closed/) {
-            $completed{$time}{ EPremClosed } ++ ;
+            $completed{$timestamp}{ EPremClosed } ++ ;
             $status_codes{ EPremClosed } ++ ;
         } else {
             printf("debug: other: %s\n", $_);
-            $completed{$time}{other} ++ ;
+            $completed{$timestamp}{other} ++ ;
         }
     } else {
         printf("debug: other: %s\n", $_);
-        $completed{$time}{other} ++ ;
+        $completed{$timestamp}{other} ++ ;
     }
-
-    $total_count ++
 }
 
 my $tab = Text::CSV_XS->new({ binary => 1, eol => "\n" });

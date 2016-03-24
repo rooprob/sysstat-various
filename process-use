@@ -1,0 +1,355 @@
+#!/usr/bin/perl -w
+#
+# Script to grab a series of stats from a running system.
+#
+# Copy to server and run. Ctrl-C to finish. Then examine files.
+#
+# Adds the following insights
+# - complete netstat -s output, normalised as a CSV
+# - complete sadc at 1s (required sysstat to be installed, not necessarily enabled)
+# - /proc/net/tcp parsing at 1s for tx/rx queue per socket
+# - tcpdump of pre/post connexion flags (SYN/ACK,FIN/ACK), and RST (requires tcpdump)
+# - pidstat of all processes, with CPU, Memory, I/O
+#
+# Note: care taken to limit the number of dependencies (ie perl modules), just
+# to avoid upsetting conversations about installing additional packages onto
+# production servers.
+#
+# Author: Robert Fielding <fieldingrp@gmail.com>
+#
+#
+=pod
+
+From the USE method: http://www.brendangregg.com/USEmethod/use-linux.html
+
+(/) CPU Utilization: vmstat 1 (add us,sys,st)
+(/) CPU Saturation: vmstat r > $(grep -c processor /proc/cpuinfo)
+(/) MEM Utilization: vmstat (free)
+(/) MEM Saturation: vmstat si/so, sar -B, "pgscank" + "pgscand" (scanning)
+NET Utilisation: sar -n DEV 1, "rxKB/s"/max "txKB/s"
+NET Errors: sar -n EDEV rxerr/s, txerr/s, rxdrop/s, txdrop/s, ip -s link
+DISK Utilisation: sar -d %util, pidstat -d
+DISK Errors: sar -d await
+STORAGE Utilisation: swapon -s Used, free Swap free, df -h
+FILE Utilisation: sar -v file-nr / /proc/sys/fs/file-max
+
+netstat -s
+    45 segments retransmited
+
+=cut
+use strict;
+use warnings;
+use Data::Dumper ;
+use Getopt::Long;
+use Sys::Hostname;
+
+my @children;
+my $start = time;
+my $hostname = hostname;
+my $report_tmpl = sprintf("%s-%s", $hostname, $start);
+
+sub _cpus {
+    open my $fh, '<', '/proc/cpuinfo' or die "Can't open cpuinfo: $!\n";
+    my $cpus = scalar (map /^processor/, <$fh>) ;
+    close $fh;
+    return $cpus;
+};
+my $cpus = _cpus;
+
+# /proc/net/tcp helper routines from
+# http://cpansearch.perl.org/src/SALVA/Linux-Proc-Net-TCP-0.05/lib/Linux/Proc/Net/TCP.pm
+sub _hex2ip {
+    my $bin = pack "C*" => map hex, $_[0] =~ /../g;
+    my @l = unpack "L*", $bin;
+    if (@l == 4) {
+        return join ':', map { sprintf "%x:%x", $_ >> 16, $_ & 0xffff } @l;
+    }
+    elsif (@l == 1) {
+        return join '.', map { $_ >> 24, ($_ >> 16 ) & 0xff, ($_ >> 8) & 0xff, $_ & 0xff } @l;
+    }
+    else { die "internal error: bad hexadecimal encoded IP address '$_[0]'" }
+}
+my @st_names = ( undef, qw(
+    ESTABLISHED
+    SYN_SENT
+    SYN_RECV
+    FIN_WAIT1
+    FIN_WAIT2
+    TIME_WAIT
+    CLOSE
+    CLOSE_WAIT
+    LAST_ACK
+    LISTEN
+    CLOSING
+));
+
+sub record_vmstat() {
+    # Flatten the output of vmstat -n 1 into a CSV
+    # Adding timestamp, cpu_use/stuation as per USE method.
+	my $child_pid = open(my $input, "-|", "vmstat -n 1");
+	if ($child_pid == 0) {
+		waitpid $child_pid, 0;
+    } else {
+		my $end;
+	    local $SIG{INT} = sub { $end = 1 };
+        local $_;
+        my $line = 0 ;
+		my $laststate = '';
+        my $timestamp = -1;
+		my %capture;
+        my @columns;
+        open(my $output,'>', "vmstat-${report_tmpl}");
+        select((select($output), $| = 1)[0]); # autoflush on
+        while (<$input>) {
+            next if /^procs/;
+			last if $end;
+            s/^\s+//; s/\s+$//g;
+            chomp;
+            $timestamp = time;
+            @columns = split(/\s+/);
+			# process first headers
+			if ($line == 0) {
+                unshift @columns, qw{timestamp};
+                push @columns, qw{cpu_use cpu_sat mem_sat};
+            } else {
+                unshift @columns, $timestamp;
+                # us13,sy14,(id15),(wa16),st17 # excl. idle only.
+                my $cpu_use; map { $cpu_use += $_ } @columns[13,14,16,17];
+                push @columns, $cpu_use;
+                # r > $cpus
+                my $r = $columns[1];
+                my $cpu_sat = ($r > $cpus) ? ($r - $cpus) : 0;
+                push @columns, $cpu_sat;
+                # si7,so8
+                my $mem_use; map { $mem_use += $_ } @columns[7,8];
+                push @columns, $mem_use;
+            }
+            printf($output "%s\n", join(',',@columns));
+            $line ++;
+		}
+        close($output);
+        close($input);
+		printf ("\nCaptured %d lines\n", $line);
+		exit;
+	}
+}
+
+sub record_netstat() {
+    # Flatten the output of netstat -s into a CSV
+	my $child_pid = open(my $input, "-|", "netstat -sc");
+	if ($child_pid == 0) {
+		waitpid $child_pid, 0;
+    } else {
+		my $end;
+	    local $SIG{INT} = sub { $end = 1 };
+        local $_;
+        my $batch = 0 ;
+		my $laststate = '';
+        my $timestamp = -1;
+		my %capture;
+        my @columns;
+        open(my $output,'>', "netstat-${report_tmpl}");
+        select((select($output), $| = 1)[0]); # autoflush on
+        while (<$input>) {
+			last if $end;
+            chomp;
+			if (/^(IpExt|Icmp|TcpExt|UdpLite|Udp|Tcp|Ip):/) {
+				$laststate = $1;
+                if ($laststate eq 'Ip') {
+                    $timestamp = time;
+                    if ($batch == 1) {
+                        @columns = sort keys %capture ;
+                        printf($output "%s,%s\n", 'timestamp', join(',', @columns));
+                    }
+                    if ($batch >= 1) {
+                        printf($output "%d,%s\n", $timestamp, join(',', map { $capture{$_} || 0 } @columns));
+                    }
+                    $batch ++ ;
+                }
+				next;
+			}
+			if (/^\s+(\d+) ([\w\s]+)$/) {
+                my $value = $1;
+                my $key = sprintf("%s_%s", $laststate, $2);
+                $key =~ s/\s/_/g;
+                $capture{$key} = $value;
+			}
+			if (/^\s+(\S+): (\d+)$/) {
+                my $value = $2;
+                my $key = sprintf("%s_%s", $laststate, $1);
+                $key =~ s/\s/_/g;
+                $capture{$key} = $value;
+			}
+		}
+        close($output);
+        close($input);
+		printf ("\nCaptured %d batches\n", $batch);
+		exit;
+	}
+}
+sub record_pidstat() {
+    # Flatten the output of pidstat into a CSV
+	my $child_pid = open(my $input, "-|", "pidstat -h -udr -p ALL 1");
+	if ($child_pid == 0) {
+		waitpid $child_pid, 0;
+    } else {
+		my $end;
+	    local $SIG{INT} = sub { $end = 1 };
+        local $_;
+        my $line = 0 ;
+        my $timestamp = -1;
+		my %capture;
+        my @columns;
+        open(my $output,'>', "pidstat-${report_tmpl}");
+        select((select($output), $| = 1)[0]); # autoflush on
+        while (<$input>) {
+			last if $end;
+            next if /Linux\s/ ; # skip header
+            next if /^$/; # skip blankline;
+            s/^\s+//; s/\s+$//g;
+            chomp;
+            $timestamp = time;
+            @columns = split(/\s+/);
+			# process first headers
+			if (/^#/) {
+                next unless $line == 0;
+                shift @columns; # remove comment
+            }
+            printf($output "%s\n", join(',',@columns));
+            $line ++;
+		}
+        close($output);
+        close($input);
+		printf ("\nCaptured %d lines\n", $line);
+		exit;
+	}
+}
+sub record_tcpdump() {
+    system('tcpdump','-i','any','-w',"tcpdump-$report_tmpl",'tcp[tcpflags] & (tcp-syn|tcp-fin|tcp-rst) != 0');
+}
+sub record_sar() {
+    system('/usr/lib64/sa/sadc','1',"sar-$report_tmpl");
+}
+sub record_nettcp() {
+    open(my $output,'>', "nettcp-${report_tmpl}");
+
+    # header https://www.kernel.org/doc/Documentation/networking/proc_net_tcp.txt
+    my @columns = qw(
+        sl
+        localaddr
+        localport
+        remoteaddr
+        remoteport
+        st
+        tx_queue
+        rx_queue
+        timer_active
+        jiff_tmr_expires
+        unrec_RTO_timeouts
+        uid
+        unans_0win
+        inode
+        refcount
+        memoryaddr
+        rtrans_timeout
+        delay_ack
+        ack_quick
+        congest_win
+        slow_start_thresh
+        more
+    );
+    printf($output "%s,%s\n", 'timestamp', join(',',@columns));
+
+    my $end;
+    local $SIG{INT} = sub { $end = 1 };
+    local $_;
+    my $batch = 0 ;
+    my $timestamp = -1;
+    my %capture;
+    my ($rin,$win,$ein) = ('');
+    my ($rout) = (0);
+    while (!defined($end)) {
+        open(my $input, "<", "/proc/net/tcp");
+		<$input> ; #discard header
+        while (<$input>) {
+            $timestamp = time;
+            chomp;
+            my @entry = /^\s*
+                         (\d+):\s                                     # sl                        -  0
+                         ([\dA-F]{8}(?:[\dA-F]{24})?):([\dA-F]{4})\s  # local address and port    -  1 y  2
+                         ([\dA-F]{8}(?:[\dA-F]{24})?):([\dA-F]{4})\s  # remote address and port   -  3 y  4
+                         ([\dA-F]{2})\s                               # st                        -  5
+                         ([\dA-F]{8}):([\dA-F]{8})\s                  # tx_queue and rx_queue     -  6 y  7
+                         (\d\d):([\dA-F]{8}|(?:F{9,}))\s              # tr and tm->when           -  8 y  9
+                         ([\dA-F]{8})\s+                              # retrnsmt                  - 10
+                         (\d+)\s+                                     # uid                       - 11
+                         (\d+)\s+                                     # timeout                   - 12
+                         (\d+)\s+                                     # inode                     - 13
+                         (\d+)\s+                                     # ref count                 - 14
+                         ((?:[\dA-F]{8}){1,2})                        # memory address            - 15
+                         (?:
+                             \s+
+                             (\d+)\s+                                 # retransmit timeout        - 16
+                             (\d+)\s+                                 # predicted tick            - 17
+                             (\d+)\s+                                 # ack.quick                 - 18
+                             (\d+)\s+                                 # sending congestion window - 19
+                             (-?\d+)                                  # slow start size threshold - 20
+                         )?
+                         \s*
+                         (.*)                                         # more                      - 21
+                         $
+                        /xi;
+
+			if (@entry) {
+				$entry[1] = _hex2ip($entry[1]); $entry[2] = hex($entry[2]); # local address and port
+				$entry[3] = _hex2ip($entry[3]); $entry[4] = hex($entry[4]); # remote address and port
+				$entry[5] = $st_names[hex($entry[5])];
+				$entry[6] = hex($entry[6]);     $entry[7] = hex($entry[7]); # tx/rx queue
+                # 16, 17, 18, 19, 20
+                $entry[16] ||= 0; $entry[17] ||= 0; $entry[18] ||= 0; $entry[19] ||=0; $entry[20] ||= 0;
+                printf($output "%d,%s\n", $timestamp, join(',', @entry));
+            }
+        }
+        close($input);
+        sleep(1);
+    }
+    close($output);
+    exit;
+}
+
+# Main
+
+push @children, \&record_netstat;
+push @children, \&record_tcpdump;
+push @children, \&record_sar;
+push @children, \&record_nettcp;
+push @children, \&record_pidstat;
+push @children, \&record_vmstat;
+
+my $n = scalar @children;
+my $forks = 0;
+for (my $idx = 0; $idx < scalar @children; $idx++) {
+  my $pid = fork;
+  if (not defined $pid) {
+     warn 'Could not fork';
+     next;
+  }
+  if ($pid) {
+    $forks++;
+    print "In the parent process PID ($$), Child pid: $pid Num of fork child processes: $forks \n";
+  } else {
+	my $funcref = $children[$idx];
+	&$funcref;
+    exit;
+  }
+}
+local $SIG{INT} = sub {
+    printf("signalling children...\n");
+    kill INT => -$$;   # the killpg(getpid(), SIGHUP) syscall
+};
+
+for (1 .. $forks) {
+   my $pid = wait();
+   print "Parent saw $pid exiting\n";
+}
+printf("Patent PID ($$) exiting\n");

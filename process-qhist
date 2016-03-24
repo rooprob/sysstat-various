@@ -9,7 +9,9 @@ my $graph = 1000;
 my $start;
 my $end;
 my $interval = 1 ;
+my $dateregex = '\w{3}\s+\d+\s+\d{2}:\d{2}:\d{2}|\d{2}\/\w{3}\/\d{4}:\d{2}:\d{2}:\d{2}\s[\-\+\d]+|\d{4}\-\d{2}\S+|\d{10}\.\d{6}';
 GetOptions (
+    "dateregex=s"=> \$dateregex,
     "graph=i"    => \$graph,
     "start=i"    => \$start,
     "end=i"      => \$end,
@@ -25,8 +27,8 @@ my $max_time = 0;
 my $timestamp;
 
 while (<>) {
-    next unless /(\w{3}\s+\d+\s+\d{2}:\d{2}:\d{2}|\d{4}\-\d{2}\S+|\d{10}\.\d{6})/;
-    $timestamp = str2time($1) unless /(\d{10}\.\d{6})/;
+    next unless $_ =~ qr/($dateregex)/o;
+    $timestamp = str2time($1, 'UTC') unless /(\d{10}\.\d{6})/;
     $timestamp = $1 if /(\d{10}\.\d{6})/;
     next unless $timestamp;
     $timestamp = int($timestamp / $interval) * $interval;
@@ -37,7 +39,7 @@ while (<>) {
 
     $completed{$timestamp} ++;
 }
-
+die ('no items') unless keys %completed;
 # Ensure report duration snapped to getops values
 $min_time = $start if $start && $min_time > $start;
 $max_time = $end if $end && $max_time < $end;

@@ -1,0 +1,93 @@
+#!/usr/bin/perl -w
+#
+# [09/Mar/2016:00:00:00 +0000] 10.0.4.11 TLSv1.2 ECDHE-RSA-AES256-GCM-SHA384 l integration "POST /webservice/foo HTTP/1.1" 200 5015 "10.0.4.11" "Java/1.8.0_66"
+#
+# time,gmdate,localdate,total,2xx,3xx,4xx,5xx,other,request_ms,/webservice/foo,GET,POST
+#
+use strict;
+use warnings;
+use Data::Dumper ;
+use Getopt::Long;
+use Text::CSV_XS;
+use Date::Parse;
+
+my $start;
+my $end;
+my $interval = 1;
+GetOptions (
+    "start=i"    => \$start,
+    "end=i"      => \$end,
+    "interval=i" => \$interval);
+
+# snap start/end time to interval
+$start = int($start / $interval) * $interval if $start;
+$end = int($end / $interval) * $interval if $end;
+
+my %completed ;
+my $min_time = 0;
+my $max_time = 0;
+my $timestamp = 0;
+my @fields = qw{ total other request_ms bytes } ;
+my %status_codes = ();
+
+while (<>) {
+    chomp ;
+
+    next if /^$/ ;
+    next unless /(\d{4}\/\d{2}\/\d{2} \d{2}:\d{2}:\d{2}|\d{2}\/\w{3}\/\d{4}:\d{2}:\d{2}:\d{2} [\-\+\d]+)/;
+    $timestamp = str2time($1, 'UTC') unless /(\d{10}\.\d{6})/;
+    next unless $timestamp ;
+
+    $timestamp = int($timestamp / $interval) * $interval;
+    next if $start && $start >= $timestamp;
+    last if $end && $end < $timestamp;
+    $max_time = $timestamp if ($timestamp > $max_time);
+    $min_time = $timestamp if ($min_time == 0);
+
+    $completed{$timestamp}{counter} ++  ;
+
+    # total time spent request interval
+    if (/([\d\.]+)us/) {
+        $completed{$timestamp}{'upstream_ms'} += 0 ;
+    }
+
+    next unless /\"(GET|POST|\-|HEAD|PUT) ([^\?]+)(\?.*)? HTTP\/\d\.\d\" (\d+) (\d+)/ ;
+    my $method = $1;
+    my $path = $2;
+    my $params = $3;
+    my $status = $4;
+    my $bytes = $5;
+
+    $completed{$timestamp}{$path} ++ ;
+    $completed{$timestamp}{$method} ++ ;
+    $completed{$timestamp}{$status} ++ ;
+    $completed{$timestamp}{'bytes'} += $bytes ;
+
+    $status_codes{$method} ++ ;
+    $status_codes{$status} ++ ;
+}
+
+# Ensure report duration snapped to getops values
+$min_time = $start if $start && $min_time > $start;
+$max_time = $end if $end && $max_time < $end;
+
+my $tab = Text::CSV_XS->new({ binary => 1, eol => "\n" });
+
+$tab->print(\*STDOUT, ['time','gmdate','localdate', @fields, sort keys %status_codes]);
+
+for (my $idx = $min_time ;
+    $idx < $max_time + $interval;
+    $idx = $idx + $interval
+) {
+
+    my @f = map { $completed{$idx}{$_} || 0 } @fields;
+    my @s = map { $completed{$idx}{$_} || 0 } keys %status_codes;
+
+    $tab->print(\*STDOUT, [
+            $idx,
+            scalar gmtime($idx),
+            scalar localtime($idx),
+            @f,
+            @s
+        ]);
+}

@@ -1,15 +1,19 @@
 #!/bin/bash
 
-recording=$1
+title=$1
+recording=$2
 
 (
 echo "set terminal png size 1000,600"
 echo "set datafile separator \",\""
 echo "set xlabel \"Minutes Elapsed\""
-echo "set ylabel \"Memory\""
+echo "set ylabel \"Count\""
 echo "set xdata time"
 echo "set timefmt \"%s\""
-echo "set format x \"%H:%M\""     # or anything else
-echo "set title \"Connection estab, accept and fin\""
-echo "plot \"$recording\" using 1:12 t \"FileNR\" w line"
+echo "set format x \"%H:%M:%S\""     # or anything else
+echo "set title \"${title}\""
+echo "plot \"$recording\" using 1:4 t \"RevQ\" w dots\\"
+echo "                ,'' using 1:5 t \"SendQ\" w dots\\"
+echo "                ,'' using 1:17 t \"ESTAB\" w line\\"
+echo "                ,'' using 1:10 t \"SS_Aloc\" w line\\"
 ) | gnuplot > ${recording}.png
